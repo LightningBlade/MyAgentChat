@@ -10,7 +10,7 @@ APP_NAME = "MyAgentChat"
 VERSION = "1.0.0"
 # OWNER: put the web address of your version.json here so every installed
 # copy checks YOUR updates. Example: "https://example.com/version.json"
-UPDATE_URL = ""
+UPDATE_URL = "https://github.com/LightningBlade/MyAgentChat/releases/latest/download/version.json"
 
 PROVIDERS = {
     "gemini": ("Google Gemini (free)", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
