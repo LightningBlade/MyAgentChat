@@ -1,0 +1,55 @@
+name: Build installer
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Take the version number from the tag (v1.0.1 -> 1.0.1)
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Put the version into the files
+        run: |
+          sed -i "s/^VERSION = .*/VERSION = \"$VERSION\"/" chat_app.py
+          sed -i "s/^AppVersion=.*/AppVersion=$VERSION/" installer.iss
+          grep -n "^VERSION" chat_app.py
+          grep -n "^AppVersion" installer.iss
+
+      - name: Build the exe
+        run: |
+          python -m pip install --upgrade pyinstaller
+          python -m PyInstaller --clean --noconsole --onefile --name MyAgentChat chat_app.py
+          ls dist
+
+      - name: Build the installer
+        run: |
+          choco install innosetup -y --no-progress
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" installer.iss
+          ls installer_output
+
+      - name: Write version.json
+        run: |
+          echo "{\"version\": \"$VERSION\", \"url\": \"https://github.com/${{ github.repository }}/releases/latest/download/MyAgentChatSetup.exe\", \"notes\": \"Version $VERSION\"}" > installer_output/version.json
+          cat installer_output/version.json
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            installer_output/MyAgentChatSetup.exe
+            installer_output/version.json
