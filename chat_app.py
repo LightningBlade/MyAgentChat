@@ -1,7 +1,7 @@
 """My Agent Chat - a light chat app with agent tools, for older PCs.
 Uses only what comes with Python. No extra installs needed to run it.
 """
-import json, os, queue, subprocess, tempfile, threading
+import json, os, queue, random, subprocess, tempfile, threading
 import urllib.error, urllib.request
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -10,10 +10,10 @@ APP_NAME = "MyAgentChat"
 VERSION = "1.0.0"
 # OWNER: put the web address of your version.json here so every installed
 # copy checks YOUR updates. Example: "https://example.com/version.json"
-UPDATE_URL = "https://github.com/LightningBlade/MyAgentChat/releases/latest/download/version.json"
+UPDATE_URL = ""
 
 PROVIDERS = {
-    "gemini": ("Google Gemini (free)", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-2.5-flash"),
+    "gemini": ("Google Gemini (free)", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "gemini-3.8-flash"),
     "groq": ("Groq (free)", "https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile"),
     "openrouter": ("OpenRouter (free models)", "https://openrouter.ai/api/v1/chat/completions", "meta-llama/llama-3.3-70b-instruct:free"),
     "mistral": ("Mistral (free tier)", "https://api.mistral.ai/v1/chat/completions", "mistral-small-latest"),
@@ -38,7 +38,7 @@ SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 
 
 def load_settings():
-    s = {"provider": "gemini", "keys": {}, "models": {}, "tools": True, "update_url": "", "mode": "chat"}
+    s = {"provider": "gemini", "keys": {}, "models": {}, "tools": True, "update_url": "", "mode": "chat", "bg": "rain"}
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             s.update(json.load(f))
@@ -66,7 +66,7 @@ def post_json(url, headers, body):
         with urllib.request.urlopen(req, timeout=120) as r:
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        hints = {401: " (the key is wrong for this provider)", 404: " (check the model name)",
+        hints = {401: " (the key is wrong for this provider)", 404: " (model name is wrong or retired - in Prompt mode type /models to see current ones)",
                  429: " (free limit reached - wait a bit or switch provider)"}
         raise RuntimeError(f"Error {e.code}{hints.get(e.code, '')}: {e.read().decode(errors='replace')[:300]}")
     except urllib.error.URLError as e:
@@ -110,7 +110,9 @@ HELP = """Commands:
   /new                forget the conversation
   /clear              clear the screen
   /mode chat          switch to the chat page
+  /bg rain|off|<file> hacker background: matrix rain, none, or your own PNG/GIF picture
   /provider [name]    show or change provider (gemini groq openrouter mistral claude)
+  /models             list the models your key can use
   /model <name>       change the model
   /key <key>          save the key for the current provider
   /tools on|off       allow the AI to use file tools
@@ -123,7 +125,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"My Agent Chat {VERSION}")
-        self.geometry("820x600")
+        self.geometry("900x640")
         self.minsize(560, 400)
         self.s = load_settings()
         self.mode = self.s.get("mode") if self.s.get("mode") in ("chat", "prompt") else "chat"
@@ -173,20 +175,26 @@ class App(tk.Tk):
         self.inp.bind("<Return>", lambda e: (self.chat_send(), "break")[1])
         self.inp.bind("<Shift-Return>", lambda e: None)
 
-        # prompt (hacker terminal) page
-        self.term_body = tk.Frame(self, bg=TERM["bg"])
-        self.tlog = tk.Text(self.term_body, wrap="word", state="disabled", bd=0, highlightthickness=0,
+        # prompt (hacker terminal) page: a terminal window on top of a hacker background
+        self.term_body = tk.Canvas(self, bg="#000000", highlightthickness=0)
+        self.panel = tk.Frame(self.term_body, bg=TERM["bg"], highlightthickness=1, highlightbackground=TERM["fg"])
+        self.term_win = self.term_body.create_window(0, 0, window=self.panel)
+        tk.Label(self.panel, text="  root@agent: ~   [ secure shell ]", anchor="w", bg=TERM["bar"], fg=TERM["fg"],
+                 font=("Consolas", 9, "bold"), pady=3).pack(side="top", fill="x")
+        self.term_foot = tk.Frame(self.panel, bg=TERM["bg"], padx=10, pady=8)
+        self.term_foot.pack(side="bottom", fill="x")
+        wrap = tk.Frame(self.panel, bg=TERM["bg"])
+        wrap.pack(side="top", fill="both", expand=True)
+        self.tlog = tk.Text(wrap, wrap="word", state="disabled", bd=0, highlightthickness=0,
                             bg=TERM["bg"], fg=TERM["fg"], font=("Consolas", 10), padx=10, pady=8,
                             insertbackground=TERM["fg"], selectbackground="#145a2a", cursor="arrow")
-        sb2 = tk.Scrollbar(self.term_body, command=self.tlog.yview, bg=TERM["bar"], troughcolor=TERM["bg"])
+        sb2 = tk.Scrollbar(wrap, command=self.tlog.yview, bg=TERM["bar"], troughcolor=TERM["bg"])
         self.tlog.config(yscrollcommand=sb2.set)
         sb2.pack(side="right", fill="y")
         self.tlog.pack(side="left", fill="both", expand=True)
         for tag, col in (("cmd", TERM["cyan"]), ("you", TERM["cyan"]), ("bot", TERM["fg"]), ("tool", TERM["warn"]),
                          ("err", TERM["err"]), ("sys", TERM["muted"])):
             self.tlog.tag_config(tag, foreground=col)
-
-        self.term_foot = tk.Frame(self, bg=TERM["bg"], padx=10, pady=8)
         tk.Label(self.term_foot, text="you@agent:~$", bg=TERM["bg"], fg=TERM["cyan"], font=("Consolas", 10, "bold")
                  ).pack(side="left")
         self.cmd = tk.Entry(self.term_foot, bg=TERM["bg"], fg=TERM["fg"], insertbackground=TERM["fg"], bd=0,
@@ -195,6 +203,13 @@ class App(tk.Tk):
         self.cmd.bind("<Return>", self.term_enter)
         self.cmd.bind("<Up>", lambda e: self.hist_step(-1))
         self.cmd.bind("<Down>", lambda e: self.hist_step(1))
+        self.tlog.bind("<Button-1>", lambda e: self.after(50, self.cmd.focus_set))
+
+        # background: matrix rain or a picture
+        self.tw, self.th, self.rain_cols, self.rain_y, self.bg_photo = 900, 600, 0, [], None
+        self.term_body.bind("<Configure>", self.term_layout)
+        self.load_bg(self.s.get("bg", "rain"), quiet=True)
+        self.after(120, self.rain_tick)
 
         self.say("sys", "=====================================\n  MY AGENT CHAT  //  PROMPT MODE  v" + VERSION +
                  "\n=====================================\n[*] talk to the AI with:  /chat your message\n[*] all commands:         /help")
@@ -223,18 +238,96 @@ class App(tk.Tk):
             b.config(bg=th["bar"], fg=th["bar_fg"], activebackground=th["bg"], activeforeground=th["bar_fg"],
                      font=("Segoe UI", 9) if chat else ("Consolas", 9))
         self.mode_btn.config(text="Prompt mode" if chat else "Chat mode")
-        for w in (self.chat_body, self.chat_foot, self.term_body, self.term_foot):
+        for w in (self.chat_body, self.chat_foot, self.term_body):
             w.pack_forget()
         if chat:
             self.chat_foot.pack(side="bottom", fill="x")
             self.chat_body.pack(fill="both", expand=True)
             self.inp.focus_set()
         else:
-            self.term_foot.pack(side="bottom", fill="x")
             self.term_body.pack(fill="both", expand=True)
             self.cmd.focus_set()
         self.render_all()
         self.refresh_status()
+
+    def list_models(self):
+        p = self.s["provider"]
+        key = self.s["keys"].get(p, "").strip()
+        if not key:
+            self.say("err", "No key for this provider yet. Use /key yourkey first.")
+            return
+        self.say("sys", "[*] asking the provider for its model list...")
+
+        def job():
+            try:
+                if p == "claude":
+                    url, h = "https://api.anthropic.com/v1/models?limit=50", {"x-api-key": key, "anthropic-version": "2023-06-01"}
+                else:
+                    url, h = PROVIDERS[p][1].rsplit("/chat/completions", 1)[0] + "/models", {"Authorization": "Bearer " + key}
+                h["User-Agent"] = APP_NAME
+                with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=30) as r:
+                    d = json.loads(r.read().decode("utf-8"))
+                ids = sorted(str(x.get("id", "")).replace("models/", "") for x in d.get("data", []))
+                self.q.put(("say", "sys", f"Models for {p}:\n  " + "\n  ".join(ids[:60]) + "\nPick one with:  /model name"))
+            except Exception as e:
+                self.q.put(("say", "err", f"Could not list models: {e}"))
+        threading.Thread(target=job, daemon=True).start()
+
+    # ---------- terminal background ----------
+    def panel_rect(self):
+        mx, my = max(60, self.tw * 0.09), max(30, self.th * 0.07)
+        return mx, my, self.tw - mx, self.th - my
+
+    def term_layout(self, e):
+        self.tw, self.th = max(e.width, 200), max(e.height, 150)
+        x0, y0, x1, y1 = self.panel_rect()
+        self.term_body.coords(self.term_win, (x0 + x1) / 2, (y0 + y1) / 2)
+        self.term_body.itemconfig(self.term_win, width=int(x1 - x0), height=int(y1 - y0))
+        self.rain_cols = self.tw // 18 + 1
+        self.rain_y = [random.randint(-30, 0) for _ in range(self.rain_cols)]
+        self.term_body.coords("bgimg", self.tw / 2, self.th / 2)
+
+    def load_bg(self, value, quiet=False):
+        """value: 'rain', 'off', or the path of a PNG/GIF picture."""
+        self.term_body.delete("bgimg")
+        self.term_body.delete("rain")
+        self.bg_photo = None
+        if value not in ("rain", "off"):
+            try:
+                self.bg_photo = tk.PhotoImage(file=os.path.expanduser(value))
+                self.term_body.create_image(self.tw / 2, self.th / 2, image=self.bg_photo, tags="bgimg")
+                self.term_body.tag_lower("bgimg")
+            except Exception:
+                if not quiet:
+                    self.say("err", "Could not load that picture. Use a PNG or GIF file, for example /bg C:\\Users\\me\\hack.png")
+                value = "rain"
+        self.s["bg"] = value
+        save_settings(self.s)
+        return value
+
+    def rain_tick(self):
+        try:
+            if self.mode == "prompt" and self.s.get("bg") == "rain" and self.rain_cols:
+                c, rows, trail = self.term_body, self.th // 16, 7
+                shades = ("#d6ffe0", "#33ff66", "#22cc50", "#179a3c", "#0f6e2b", "#0a4a1d", "#062f13")
+                x0, y0, x1, y1 = self.panel_rect()
+                c.delete("rain")
+                for i in range(self.rain_cols):
+                    x = i * 18 + 9
+                    for k in range(trail):
+                        row = self.rain_y[i] - k
+                        y = row * 16 + 8
+                        if 0 <= row < rows and not (x0 - 8 <= x <= x1 + 8 and y0 - 8 <= y <= y1 + 8):
+                            c.create_text(x, y, text=random.choice("01ABCDEF<>/|$#@%&*+="), fill=shades[k],
+                                          font=("Consolas", 10, "bold"), tags="rain")
+                    self.rain_y[i] += 1
+                    if self.rain_y[i] - trail > rows or random.random() < 0.015:
+                        self.rain_y[i] = random.randint(-15, 0)
+            elif self.mode == "prompt" and self.s.get("bg") == "off":
+                self.term_body.delete("rain")
+        except tk.TclError:
+            return
+        self.after(110, self.rain_tick)
 
     # ---------- drawing ----------
     def visible(self):
@@ -390,6 +483,8 @@ class App(tk.Tk):
             else:
                 self.say("sys", "Providers: " + "  ".join(("*" if k == p else "") + k for k in PROVIDERS)
                          + "\n(* = current)  change with /provider name")
+        elif name == "models":
+            self.list_models()
         elif name == "model":
             if arg:
                 self.s["models"][p] = arg
@@ -405,6 +500,12 @@ class App(tk.Tk):
                 self.say("sys", f"[*] key saved for {p}")
             else:
                 self.say("err", "Usage: /key your-key")
+        elif name == "bg":
+            if arg:
+                shown = self.load_bg(arg.strip('"'))
+                self.say("sys", f"[*] background: {shown if shown in ('rain', 'off') else 'picture loaded'}")
+            else:
+                self.say("err", "Use /bg rain   /bg off   or   /bg C:\\path\\picture.png")
         elif name == "tools":
             if arg in ("on", "off"):
                 self.s["tools"] = arg == "on"
